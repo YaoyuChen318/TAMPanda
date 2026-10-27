@@ -12,7 +12,7 @@
 
 **Planning** — IK via [MINK](https://github.com/kevinzakka/mink) (default) or a built-in analytical Franka solver (`FrankaEnvironment(..., ik_solver="frantik")`); RRT\* with path smoothing; geometry-aware grasp candidate ranking; A\* navigation with occupancy-grid obstacle inflation
 
-**Manipulation** — `PickPlaceExecutor` for end-to-end pick-and-place with multi-candidate retry and kinematic object attachment; `PointCloudGraspPlanner` for rudimentary grasp pose computation on unseen objects from segmented point clouds (WIP)
+**Manipulation** — `PickPlaceExecutor` for end-to-end pick-and-place with multi-candidate retry and kinematic object attachment; grasp candidates for unseen objects from segmented point clouds: `PointCloudGraspPlanner` (PCA box), `AntipodalGraspPlanner` (6-DOF, Ferrari-Canny ranking) and `GraspGenPlanner` (learned, remote GPU server)
 
 **Symbolic Planning** — grid-based tabletop and blocks-world PDDL domains; `ActionFeasibilityChecker` validates symbolic actions against the continuous planner; parallel dataset generation with BFS and optional W&B logging
 
@@ -109,6 +109,24 @@ The tabletop domain connects PDDL task planning to the continuous planner: symbo
 - `object_browser.py` — browse, download, and preview YCB / Google Scanned Objects
 
 **Benchmarks** (all headless) — `benchmark_grasping.py`, `benchmark_cylinder_grasping.py`, `benchmark_feasibility.py`, `benchmark_feasibility_params.py`, `benchmark_parallel_rrt.py`, `benchmark_ycb_grasp.py`
+
+### Learned grasps with GraspGen
+
+[GraspGen](https://github.com/NVlabs/GraspGen) needs a CUDA GPU, so it runs as a server (pretrained Franka weights from `adithyamurali/GraspGenModels`, NVIDIA non-commercial licence); TAMPanda only sends it the object point cloud. On the GPU machine:
+
+```bash
+MODELS_DIR=/path/to/GraspGenModels \
+SERVER_ARGS="--gripper_config /models/checkpoints/graspgen_franka_panda.yml" \
+  docker compose -f docker/compose.serve.yml up --build
+# or, without Docker: python client-server/graspgen_server.py --gripper_config .../graspgen_franka_panda.yml
+```
+
+Here:
+
+```bash
+pip install -e '.[graspgen]'
+python examples/benchmark_ycb_grasp.py --planner graspgen --graspgen-host <gpu-host> --ik frantik
+```
 
 ## Citation
 

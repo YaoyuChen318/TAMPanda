@@ -360,6 +360,7 @@ def benchmark(
             approach_dist=0.12,
             lift_height=0.22,
         )
+        print(f"GraspGen server: {pc_planner.check_server()}")
     elif planner_name == "antipodal":
         pc_planner = AntipodalGraspPlanner(
             table_z=TABLE_Z,

@@ -48,15 +48,15 @@ class GraspGenClient:
 
     def _connect(self):
         sock = self._ctx.socket(self._zmq.REQ)
-        sock.setsockopt(self._zmq.RCVTIMEO, self._timeout_ms)
         sock.setsockopt(self._zmq.SNDTIMEO, self._timeout_ms)
         sock.setsockopt(self._zmq.LINGER, 0)
         sock.connect(self._addr)
         return sock
 
-    def request(self, payload: dict) -> dict:
+    def request(self, payload: dict, timeout_ms: Optional[int] = None) -> dict:
         if self._socket is None:
             self._socket = self._connect()
+        self._socket.setsockopt(self._zmq.RCVTIMEO, timeout_ms or self._timeout_ms)
         try:
             self._socket.send(self._msgpack.packb(payload, default=self._encode, use_bin_type=True))
             response = self._msgpack.unpackb(self._socket.recv(), object_hook=self._decode, raw=False)
@@ -69,8 +69,8 @@ class GraspGenClient:
             raise RuntimeError(f"GraspGen server error: {response['error']}")
         return response
 
-    def metadata(self) -> dict:
-        return self.request({"action": "metadata"})
+    def metadata(self, timeout_ms: Optional[int] = None) -> dict:
+        return self.request({"action": "metadata"}, timeout_ms)
 
     def infer(self, points: np.ndarray, **params) -> tuple:
         """Return (grasps (M, 4, 4), confidences (M,)) in the frame of ``points``."""
@@ -92,7 +92,9 @@ class GraspGenPlanner:
     """Grasp candidates from a GraspGen server, same interface as PointCloudGraspPlanner.
 
     GraspGen only sees the object, so grasps reaching below ``table_z`` are dropped.
-    ``grasp_threshold`` = -1 returns the top-k instead of thresholding.
+    ``grasp_threshold`` = -1 returns the top-k instead of thresholding.  The
+    server must serve ``gripper``; it is checked on first use, since GraspGen's
+    server defaults to a Robotiq model.
     """
 
     def __init__(
@@ -106,6 +108,7 @@ class GraspGenPlanner:
         lift_height: float = 0.20,
         table_z: Optional[float] = 0.27,
         table_clearance: float = 0.01,
+        gripper: str = "franka_panda",
         client: Optional[GraspGenClient] = None,
     ):
         self.num_grasps = num_grasps
@@ -115,10 +118,28 @@ class GraspGenPlanner:
         self.lift_height = float(lift_height)
         self.table_z = table_z
         self.table_clearance = float(table_clearance)
+        self.gripper = gripper
         self._client = client or GraspGenClient(host, port)
+        self._server_checked = False
+
+    def check_server(self, timeout_ms: int = 5000) -> dict:
+        """Fail fast if the server is down or serves another gripper; returns its metadata."""
+        try:
+            meta = self._client.metadata(timeout_ms=timeout_ms)
+        except TimeoutError as e:
+            raise ConnectionError(
+                f"No GraspGen server answered: start it with "
+                f"--gripper_config .../graspgen_{self.gripper}.yml") from e
+        if meta.get("gripper_name") != self.gripper:
+            raise RuntimeError(f"GraspGen server serves '{meta.get('gripper_name')}', "
+                               f"expected '{self.gripper}'")
+        self._server_checked = True
+        return meta
 
     def generate_candidates(self, points: np.ndarray) -> List[GraspCandidate]:
         """Candidates for the segmented object cloud, best GraspGen confidence first."""
+        if not self._server_checked:
+            self.check_server()
         grasps, confidences = self._client.infer(
             points,
             num_grasps=self.num_grasps,
