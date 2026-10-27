@@ -14,11 +14,13 @@ from tampanda.environments.assets import (
     SCENE_MJX,
 )
 from tampanda.ik.mink_ik import MinkIK
+from tampanda.ik.frantik_ik import FrantikIK
 from tampanda.planners.rrt_star import RRTStar
 from tampanda.planners.feasibility_rrt import FeasibilityRRT
 from tampanda.planners.robust_planner import RobustPlanner
 from tampanda.planners.grasp_planner import GraspPlanner, GraspCandidate, GraspType
-from tampanda.planners.pointcloud_grasp_planner import PointCloudGraspPlanner
+from tampanda.planners.pointcloud_grasp_planner import AntipodalGraspPlanner, PointCloudGraspPlanner
+from tampanda.planners.graspgen_planner import GraspGenPlanner
 from tampanda.planners.pick_place import PickPlaceExecutor
 from tampanda.controllers.position_controller import PositionController, ControllerStatus
 from tampanda.controllers.diffbot_controller import DifferentialDriveController
@@ -45,6 +47,7 @@ __all__ = [
     "SCENE_TEST",
     "SCENE_MJX",
     "MinkIK",
+    "FrantikIK",
     "RRTStar",
     "FeasibilityRRT",
     "RobustPlanner",
@@ -52,6 +55,8 @@ __all__ = [
     "GraspCandidate",
     "GraspType",
     "PointCloudGraspPlanner",
+    "GraspGenPlanner",
+    "AntipodalGraspPlanner",
     "PickPlaceExecutor",
     "PositionController",
     "ControllerStatus",

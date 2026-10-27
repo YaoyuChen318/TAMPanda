@@ -19,6 +19,7 @@ dependencies = [
     "loop-rate-limiters>=1.0.0",
     "matplotlib>=3.0.0",
     "opencv-python>=4.0.0",
+    "scipy>=1.7",
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -33,6 +34,7 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
+graspgen = ["pyzmq", "msgpack", "msgpack-numpy"]
 
 [tool.setuptools.packages.find]
 include = ["tampanda*", "manipulation*"]

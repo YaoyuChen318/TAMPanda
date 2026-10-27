@@ -1,10 +1,11 @@
-"""Grasp benchmark for YCB objects using PointCloudGraspPlanner.
+"""Grasp benchmark for YCB objects using the point-cloud grasp planners or GraspGen.
 
 Downloads YCB objects on first run (cached in ~/.cache/manipulation/assets/).
 For each object the benchmark:
   1. Teleports it to a random pose on the table.
   2. Captures segmented point clouds from three cameras.
-  3. Runs PointCloudGraspPlanner (PCA-based OBB, no ground-truth geometry).
+  3. Runs PointCloudGraspPlanner (PCA-based OBB, no ground-truth geometry), or
+     GraspGenPlanner (learned 6-DOF grasps from a remote GraspGen server).
   4. If no candidates are found, rotates the object in 45° Z steps to search for a
      graspable orientation (handles elongated objects that only fit the gripper at
      specific yaws).
@@ -20,6 +21,9 @@ Usage::
     python benchmark_ycb_grasp.py --trials 3 --visualize
     python benchmark_ycb_grasp.py --list-objects
 
+    # Learned grasps from a GraspGen server (graspgen_franka_panda.yml) on a GPU host:
+    python benchmark_ycb_grasp.py --planner graspgen --graspgen-host gpu-box --ik frantik
+
 Set GITHUB_TOKEN in the environment to raise the GitHub API rate limit from
 60 to 5000 requests/hour when downloading many objects.
 """
@@ -33,7 +37,9 @@ import numpy as np
 
 from tampanda import FrankaEnvironment, RRTStar
 from tampanda.planners import PickPlaceExecutor
-from tampanda.planners.pointcloud_grasp_planner import PointCloudGraspPlanner
+from tampanda.planners.pointcloud_grasp_planner import AntipodalGraspPlanner, PointCloudGraspPlanner
+from tampanda.planners.graspgen_planner import GraspGenPlanner
+from tampanda.planners.grasp_planner import filter_reachable
 from tampanda.perception import MujocoCamera
 from tampanda.scenes import ArmSceneBuilder, TABLE_SYMBOLIC_TEMPLATE
 from tampanda.scenes.assets import YCBDownloader
@@ -68,7 +74,7 @@ DEFAULT_YCB_OBJECTS = [
 # Scene construction
 # ---------------------------------------------------------------------------
 
-def _build_scene(ycb_names: List[str]) -> FrankaEnvironment:
+def _build_scene(ycb_names: List[str], ik_solver: str = "mink") -> FrankaEnvironment:
     """Download & build a scene with all selected YCB objects parked off-screen."""
     dl = YCBDownloader()
     b  = ArmSceneBuilder()
@@ -82,7 +88,7 @@ def _build_scene(ycb_names: List[str]) -> FrankaEnvironment:
         b.add_resource(f"ycb_{name}", {"type": "ycb", "name": name})
         b.add_object(f"ycb_{name}", name=name, pos=HIDE_POS)
 
-    return b.build_env(rate=200.0)
+    return b.build_env(rate=200.0, ik_solver=ik_solver)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +158,25 @@ def _hide_object(env: FrankaEnvironment, name: str) -> None:
 # Graspability check with Z-rotation search
 # ---------------------------------------------------------------------------
 
+def _cloud_with_viewpoints(env, camera, name, n_points: int = 2000):
+    """Segmented cloud of *name* from all CAMERAS, plus each point's camera position."""
+    pts, views = [], []
+    for cam in CAMERAS:
+        clouds = camera.get_segmented_pointcloud(cam, 640, 480, num_samples=n_points,
+                                                 min_depth=0.10, max_depth=2.0)
+        if name in clouds and len(clouds[name][0]):
+            p = clouds[name][0]
+            pts.append(p)
+            views.append(np.tile(env.data.cam_xpos[env.model.camera(cam).id], (len(p), 1)))
+    if not pts:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    pts, views = np.vstack(pts), np.vstack(views)
+    if len(pts) > n_points:
+        idx = np.random.choice(len(pts), size=n_points, replace=False)
+        pts, views = pts[idx], views[idx]
+    return pts, views
+
+
 def _find_candidates(
     env:       FrankaEnvironment,
     camera:    MujocoCamera,
@@ -180,7 +205,15 @@ def _find_candidates(
             break
 
         pts = pts_entry[0]
-        candidates = pc_planner.generate_candidates(pts)
+        if isinstance(pc_planner, AntipodalGraspPlanner):
+            # per-point cameras orient the normals (needed inside hollow objects)
+            pts, views = _cloud_with_viewpoints(env, camera, name)
+            candidates = pc_planner.generate_candidates(pts, viewpoints=views)
+        else:
+            candidates = pc_planner.generate_candidates(pts)
+        # drop unreachable candidates before RRT
+        if isinstance(pc_planner, (GraspGenPlanner, AntipodalGraspPlanner)) and hasattr(env.ik, "solve_all"):
+            candidates = filter_reachable(candidates, env.ik, max_candidates=10)
 
         if candidates:
             return candidates, step
@@ -206,6 +239,7 @@ def _run_trial(
     pc_planner: PointCloudGraspPlanner,
     camera:     MujocoCamera,
     name:       str,
+    place_rng:  np.random.Generator,
     verbose:    bool = True,
 ) -> dict:
     res = {
@@ -216,7 +250,7 @@ def _run_trial(
         "grasp_type":      None,
     }
 
-    pos = _place_object(env, name, np.random.default_rng())
+    pos = _place_object(env, name, place_rng)
 
     if verbose:
         print(f"  placed at {np.round(pos, 3)}", end="  ", flush=True)
@@ -295,11 +329,20 @@ def benchmark(
     trials_per_object: int = 3,
     visualize: bool = False,
     seed: int = 42,
+    planner_name: str = "pca",
+    graspgen_host: str = "localhost",
+    graspgen_port: int = 5556,
+    ik_solver: str = "mink",
+    use_attachment: bool = True,
+    collision_margin: float = 0.005,
+    grasp_quality: str = "ferrari_canny",
 ) -> List[dict]:
     np.random.seed(seed)
+    # separate RNG so placements do not depend on how much planning consumed
+    place_rng = np.random.default_rng(seed)
 
     print(f"\nBuilding scene with {len(ycb_names)} YCB objects …")
-    env = _build_scene(ycb_names)
+    env = _build_scene(ycb_names, ik_solver)
     _patch_fast_step(env)
 
     if visualize:
@@ -310,14 +353,31 @@ def benchmark(
     planner.step_size        = 0.15
     planner.goal_sample_rate = 0.15
 
-    pc_planner = PointCloudGraspPlanner(
-        table_z=TABLE_Z,
-        approach_dist=0.12,
-        lift_height=0.22,
-    )
+    if planner_name == "graspgen":
+        pc_planner = GraspGenPlanner(
+            host=graspgen_host, port=graspgen_port,
+            table_z=TABLE_Z,
+            approach_dist=0.12,
+            lift_height=0.22,
+        )
+    elif planner_name == "antipodal":
+        pc_planner = AntipodalGraspPlanner(
+            table_z=TABLE_Z,
+            approach_dist=0.12,
+            lift_height=0.22,
+            collision_margin=collision_margin,
+            quality_metric=grasp_quality,
+            seed=seed,
+        )
+    else:
+        pc_planner = PointCloudGraspPlanner(
+            table_z=TABLE_Z,
+            approach_dist=0.12,
+            lift_height=0.22,
+        )
     executor = PickPlaceExecutor(
         env, planner,
-        use_attachment=True,
+        use_attachment=use_attachment,
         max_plan_iters=2000,
     )
     camera = MujocoCamera(env, width=640, height=480)
@@ -331,12 +391,12 @@ def benchmark(
 
         for trial in range(trials_per_object):
             print(f"  trial {trial + 1}/{trials_per_object}: ", end="", flush=True)
-            res = _run_trial(env, planner, executor, pc_planner, camera, name)
+            res = _run_trial(env, planner, executor, pc_planner, camera, name, place_rng)
             res["trial"] = trial
             all_results.append(res)
 
     elapsed = time.time() - t_start
-    _print_report(all_results, elapsed, trials_per_object)
+    _print_report(all_results, elapsed, trials_per_object, type(pc_planner).__name__)
 
     camera.close()
     if visualize and env.viewer is not None:
@@ -349,9 +409,10 @@ def benchmark(
 # Report
 # ---------------------------------------------------------------------------
 
-def _print_report(results: List[dict], elapsed: float, tpo: int) -> None:
+def _print_report(results: List[dict], elapsed: float, tpo: int,
+                  planner_name: str = "PointCloudGraspPlanner") -> None:
     print("\n" + "=" * 65)
-    print("  YCB GRASP BENCHMARK  —  PointCloudGraspPlanner")
+    print(f"  YCB GRASP BENCHMARK  —  {planner_name}")
     print("=" * 65)
 
     n   = len(results)
@@ -395,7 +456,7 @@ def _print_report(results: List[dict], elapsed: float, tpo: int) -> None:
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Grasp benchmark for YCB objects using PointCloudGraspPlanner."
+        description="Grasp benchmark for YCB objects using PointCloudGraspPlanner or GraspGenPlanner."
     )
     ap.add_argument(
         "--ycb", nargs="+", metavar="NAME",
@@ -406,6 +467,20 @@ def main():
     ap.add_argument("--visualize", action="store_true",
                     help="Open MuJoCo viewer during benchmark")
     ap.add_argument("--seed",      type=int,  default=42)
+    ap.add_argument("--planner", choices=["pca", "antipodal", "graspgen"], default="pca",
+                    help="Grasp candidate source (default: pca = PointCloudGraspPlanner)")
+    ap.add_argument("--collision-margin", type=float, default=0.005,
+                    help="Hand inflation (m) for --planner antipodal; 0 allows tight grasps such as a mug rim")
+    ap.add_argument("--grasp-quality", choices=["ferrari_canny", "heuristic"], default="ferrari_canny",
+                    help="Candidate ranking for --planner antipodal")
+    ap.add_argument("--no-attach", action="store_true",
+                    help="Do not weld the object to the hand while lifting (tests a real friction grasp)")
+    ap.add_argument("--graspgen-host", default="localhost",
+                    help="GraspGen server host (--planner graspgen)")
+    ap.add_argument("--graspgen-port", type=int, default=5556,
+                    help="GraspGen server port (--planner graspgen)")
+    ap.add_argument("--ik", choices=["mink", "frantik"], default="mink",
+                    help="IK solver; frantik also enables reachability screening for graspgen")
     ap.add_argument("--list-objects", action="store_true",
                     help="Print all available YCB objects and exit")
     args = ap.parse_args()
@@ -427,6 +502,13 @@ def main():
         trials_per_object=args.trials,
         visualize=args.visualize,
         seed=args.seed,
+        planner_name=args.planner,
+        graspgen_host=args.graspgen_host,
+        graspgen_port=args.graspgen_port,
+        ik_solver=args.ik,
+        use_attachment=not args.no_attach,
+        collision_margin=args.collision_margin,
+        grasp_quality=args.grasp_quality,
     )
 
 

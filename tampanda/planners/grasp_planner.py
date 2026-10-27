@@ -35,6 +35,7 @@ class GraspType(Enum):
     TOP_DOWN_X = "top_down_x"  # Approach from above; fingers close along world ±X
     TOP_DOWN_Y = "top_down_y"  # Approach from above; fingers close along world ±Y
     FRONT      = "front"       # Approach from −Y (robot side); fingers along world ±X
+    SIX_DOF    = "six_dof"     # Arbitrary pose (AntipodalGraspPlanner, GraspGenPlanner)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +84,19 @@ class GraspCandidate:
     grasp_pos:    np.ndarray   # attachment_site world pos at grasp contact
     lift_pos:     np.ndarray   # attachment_site world pos for post-grasp lift
     score:        float = 0.0
+
+
+def filter_reachable(candidates: List["GraspCandidate"], ik,
+                     max_candidates: Optional[int] = None) -> List["GraspCandidate"]:
+    """Keep candidates whose grasp and approach poses have an IK solution (needs ``ik.solve_all``)."""
+    reachable = []
+    for c in candidates:
+        if len(ik.solve_all(c.grasp_pos, c.grasp_quat)) and \
+                len(ik.solve_all(c.approach_pos, c.grasp_quat)):
+            reachable.append(c)
+            if max_candidates is not None and len(reachable) >= max_candidates:
+                break
+    return reachable
 
 
 class GraspPlanner:
