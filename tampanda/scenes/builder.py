@@ -506,12 +506,17 @@ class SceneBuilder:
             if old:
                 elem.set("name", f"{prefix}_{old}")
 
-        # --- Inject freejoint if absent ---
-        has_free = any(
-            (c.tag == "joint" and c.get("type") == "free") or c.tag == "freejoint"
-            for c in body
-        )
-        if not has_free:
+        # --- Inject freejoint if absent; name an unnamed one ---
+        # set_object_pose() looks the joint up as "{name}_freejoint", so an
+        # unnamed free joint (e.g. one added for damping) must be named too.
+        free_joints = [
+            c for c in body
+            if (c.tag == "joint" and c.get("type") == "free") or c.tag == "freejoint"
+        ]
+        for fj in free_joints:
+            if not fj.get("name"):
+                fj.set("name", f"{prefix}_freejoint")
+        if not free_joints:
             fj = ET.Element("freejoint")
             fj.set("name", f"{prefix}_freejoint")
             body.insert(0, fj)

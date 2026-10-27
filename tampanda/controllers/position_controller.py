@@ -16,7 +16,7 @@ class PositionController(RobotArmController):
         end: np.ndarray,
         step_size: float
     ) -> List[np.ndarray]:
-        steps = int(np.linalg.norm(end - start) / step_size)
+        steps = max(1, int(np.linalg.norm(end - start) / step_size))
         trajectory = [start + (end - start) * (i / steps) for i in range(steps + 1)]
         return trajectory
 
