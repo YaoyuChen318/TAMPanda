@@ -220,10 +220,12 @@ def run_trial(
 # Benchmark loop
 # ---------------------------------------------------------------------------
 
-def benchmark(trials_per_block: int = 3, visualize: bool = False, seed: int = 42):
+def benchmark(trials_per_block: int = 3, visualize: bool = False, seed: int = 42,
+              ik_solver: str = "mink"):
     rng = np.random.default_rng(seed)
+    np.random.seed(seed)           # RRT sampling, so runs are reproducible
 
-    env = make_blocks_builder().build_env(rate=200.0)
+    env = make_blocks_builder().build_env(rate=200.0, ik_solver=ik_solver)
     _patch_fast_step(env)          # bypass rate.sleep() for headless speed
 
     if visualize:
@@ -262,7 +264,7 @@ def benchmark(trials_per_block: int = 3, visualize: bool = False, seed: int = 42
             all_results.append(res)
 
     elapsed = time.time() - t_start
-    _print_report(all_results, elapsed, trials_per_block)
+    _print_report(all_results, elapsed, trials_per_block, ik_solver)
 
     if visualize and env.viewer is not None:
         env.viewer.close()
@@ -272,9 +274,9 @@ def benchmark(trials_per_block: int = 3, visualize: bool = False, seed: int = 42
 
 # ---------------------------------------------------------------------------
 
-def _print_report(results: list, elapsed: float, tpb: int):
+def _print_report(results: list, elapsed: float, tpb: int, ik_solver: str = "mink"):
     print("\n\n" + "=" * 65)
-    print("  GRASPING BENCHMARK REPORT")
+    print(f"  GRASPING BENCHMARK REPORT  (IK: {ik_solver})")
     print("=" * 65)
 
     n   = len(results)
@@ -320,5 +322,7 @@ if __name__ == "__main__":
     ap.add_argument("--trials",    type=int,  default=3)
     ap.add_argument("--visualize", action="store_true")
     ap.add_argument("--seed",      type=int,  default=42)
+    ap.add_argument("--ik",        choices=["mink", "frantik"], default="mink")
     args = ap.parse_args()
-    benchmark(trials_per_block=args.trials, visualize=args.visualize, seed=args.seed)
+    benchmark(trials_per_block=args.trials, visualize=args.visualize, seed=args.seed,
+              ik_solver=args.ik)

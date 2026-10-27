@@ -10,6 +10,7 @@ from typing import Optional, List, Tuple
 
 from tampanda.core.robot_arm_env import RobotArmEnvironment
 from tampanda.ik.mink_ik import MinkIK
+from tampanda.ik.frantik_ik import FrantikIK
 from tampanda.controllers.position_controller import PositionController, ControllerStatus
 from tampanda.utils.rate_limiter import RateLimiter
 
@@ -50,10 +51,17 @@ class FrankaEnvironment(RobotArmEnvironment):
 
     HOME_QPOS = np.array([0.0, 0.0, 0.0, -1.57079, 0.0, 1.57079, -0.7853, 0.04, 0.04])
 
-    def __init__(self, path: str, rate: float = 200.0, collision_bodies: Optional[List[str]] = None):
+    def __init__(self, path: str, rate: float = 200.0, collision_bodies: Optional[List[str]] = None,
+                 ik_solver: str = "mink"):
         self.model = mujoco.MjModel.from_xml_path(path)
         self.data = mujoco.MjData(self.model)
-        self.ik = MinkIK(self.model, self.data)
+        # "mink" (numerical, default) or "frantik" (analytical, Franka Panda only)
+        if ik_solver == "mink":
+            self.ik = MinkIK(self.model, self.data)
+        elif ik_solver == "frantik":
+            self.ik = FrantikIK(self.model, self.data)
+        else:
+            raise ValueError(f"Unknown ik_solver '{ik_solver}', expected 'mink' or 'frantik'")
         self.controller = PositionController(self.model, self.data)
         
         # List of body names to check for collisions

@@ -1,5 +1,6 @@
 """Example demonstrating basic IK control with the Franka Panda robot."""
 
+import argparse
 from pathlib import Path
 import numpy as np
 
@@ -9,9 +10,14 @@ _XML = SCENE_MJX
 
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--ik", choices=["mink", "frantik"], default="mink",
+                    help="IK solver: mink (numerical) or frantik (analytical)")
+    args = ap.parse_args()
+
     # Load environment
     print("Initializing environment...")
-    env = FrankaEnvironment(_XML.as_posix(), rate=200.0)
+    env = FrankaEnvironment(_XML.as_posix(), rate=200.0, ik_solver=args.ik)
     
     print("Launching viewer...")
     with env.launch_viewer() as viewer:

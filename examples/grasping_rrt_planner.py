@@ -7,6 +7,7 @@ GraspPlanner features:
   - Aligns finger axis with block orientation to minimise required opening
 """
 
+import argparse
 import time
 
 import numpy as np
@@ -34,7 +35,12 @@ def _pick_candidate(candidates):
 
 
 def main():
-    env = make_symbolic_builder().build_env(rate=200.0)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--ik", choices=["mink", "frantik"], default="mink",
+                    help="IK solver: mink (numerical) or frantik (analytical)")
+    args = ap.parse_args()
+
+    env = make_symbolic_builder().build_env(rate=200.0, ik_solver=args.ik)
 
     planner = RRTStar(env)
     planner.max_iterations   = 1000
@@ -69,7 +75,7 @@ def main():
                 env.rest(2.0)
                 targets = sorted(state_manager.ground_state()["cylinders"].keys())
 
-            dt = env.step()
+            env.step()
 
             if env.sim_time > 0.0 and target is None and len(targets) > 0:
                 target     = targets[0]

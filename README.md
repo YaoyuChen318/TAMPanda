@@ -10,7 +10,7 @@
 
 **Simulation & Control** — MuJoCo environments for the Franka Panda and a differential-drive mobile robot; collision detection, gravity compensation, position-based trajectory controller
 
-**Planning** — IK via [MINK](https://github.com/kevinzakka/mink); RRT\* with path smoothing; geometry-aware grasp candidate ranking; A\* navigation with occupancy-grid obstacle inflation
+**Planning** — IK via [MINK](https://github.com/kevinzakka/mink) (default) or a built-in analytical Franka solver (`FrankaEnvironment(..., ik_solver="frantik")`); RRT\* with path smoothing; geometry-aware grasp candidate ranking; A\* navigation with occupancy-grid obstacle inflation
 
 **Manipulation** — `PickPlaceExecutor` for end-to-end pick-and-place with multi-candidate retry and kinematic object attachment; `PointCloudGraspPlanner` for rudimentary grasp pose computation on unseen objects from segmented point clouds (WIP)
 
@@ -127,5 +127,6 @@ If you use TAMPanda in your research, please cite:
 
 - [MuJoCo](https://mujoco.org) (Google DeepMind) — physics engine
 - [MINK](https://github.com/kevinzakka/mink) (Kevin Zakka) — differential IK library
+- [FRANTIK](https://github.com/CoMMALab/frantik) (CoMMALab) — analytical Franka IK, ported to numpy in `tampanda/ik/frantik_ik.py` (Apache-2.0); algorithm by He & Liu, ICCMA 2021
 - [elpis-lab/ycb_dataset](https://github.com/elpis-lab/ycb_dataset) — YCB object assets
 - [kevinzakka/mujoco_scanned_objects](https://github.com/kevinzakka/mujoco_scanned_objects) — Google Scanned Objects assets

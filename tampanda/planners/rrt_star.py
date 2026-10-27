@@ -11,6 +11,53 @@ from typing import List, Optional
 from tampanda.core.base_mp import BaseMotionPlanner
 
 
+def candidate_goals(
+    env,
+    ik,
+    target_pos: np.ndarray,
+    target_quat: np.ndarray,
+    max_goals: int = 3,
+    home: Optional[np.ndarray] = None,
+    min_separation: float = 1.0,
+    limit_margin: float = 0.1,
+    max_collision_checks: int = 50,
+) -> List[np.ndarray]:
+    """Distinct collision-free goals from a multi-solution IK (``ik.solve_all``).
+
+    Re-seeding such an IK just re-picks the same closest solution, so planners
+    try these instead.  Goals are ranked by distance to the current and the
+    ``home`` posture (relaxed postures are easier for RRT), at least
+    ``min_separation`` apart, those within ``limit_margin`` of a joint limit last.
+    """
+    ik.update_configuration(env.data.qpos)
+    ik.set_target_position(target_pos, target_quat)
+    solutions = ik.solve_all()
+    if len(solutions) == 0:
+        return []
+
+    if home is None:
+        home = getattr(env, "HOME_QPOS", env.data.qpos)[:7]
+    q_now = env.data.qpos[:7]
+    score = np.linalg.norm(solutions - q_now, axis=1) + np.linalg.norm(solutions - home, axis=1)
+    lo, hi = env.model.jnt_range[:7, 0], env.model.jnt_range[:7, 1]
+    near_limit = np.minimum(solutions - lo, hi - solutions).min(axis=1) < limit_margin
+    solutions = solutions[np.lexsort((score, near_limit))]
+
+    goals: List[np.ndarray] = []
+    checks = 0
+    for q in solutions:
+        if any(np.linalg.norm(q - g) < min_separation for g in goals):
+            continue
+        if checks >= max_collision_checks:
+            break
+        checks += 1
+        if env.is_collision_free(q):
+            goals.append(q)
+            if len(goals) >= max_goals:
+                break
+    return goals
+
+
 class Node:
     """RRT* tree node."""
     
@@ -248,11 +295,24 @@ class RRTStar(BaseMotionPlanner):
             dt: Time step for IK solver
             max_iterations: Maximum RRT iterations
             max_ik_retries: Number of times to retry IK from different starting configs
+                (or, for an IK with ``solve_all``, number of distinct goals to try)
         
         Returns:
             Path as list of configurations, or None if planning failed
         """
         start_config = self.data.qpos[:7].copy()
+
+        if hasattr(self.ik, "solve_all"):
+            # multi-solution IK: try distinct goals instead of re-seeding
+            for goal_config in candidate_goals(self.env, self.ik, target_pos, target_quat,
+                                               max_goals=max_ik_retries):
+                path = self.plan(start_config, goal_config, max_iterations)
+                if path is not None:
+                    q = self.data.qpos.copy()
+                    q[:7] = goal_config
+                    self.ik.update_configuration(q)
+                    return path
+            return None
         
         # Try IK with progressive fallback strategy
         for attempt in range(max_ik_retries):

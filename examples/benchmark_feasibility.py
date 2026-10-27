@@ -37,8 +37,8 @@ from tampanda.symbolic.domains.tabletop.feasibility import ActionFeasibilityChec
 # Setup
 # ---------------------------------------------------------------------------
 
-def build_checker(max_iterations: int):
-    env = make_symbolic_builder().build_env(rate=200.0)
+def build_checker(max_iterations: int, ik_solver: str = "mink"):
+    env = make_symbolic_builder().build_env(rate=200.0, ik_solver=ik_solver)
 
     planner = RRTStar(env)
     planner.max_iterations   = max_iterations
@@ -112,12 +112,14 @@ def benchmark(n_trials: int = 10,
               max_iterations: int = 1000,
               seed: int = 42,
               visualize: bool = False,
-              display_secs: float = 4.0):
+              display_secs: float = 4.0,
+              ik_solver: str = "mink"):
 
     rng = np.random.default_rng(seed)
+    np.random.seed(seed)           # target choice and RRT sampling, so runs are reproducible
 
-    print(f"Building environment... (max_iterations={max_iterations})")
-    env, checker, state_manager = build_checker(max_iterations)
+    print(f"Building environment... (max_iterations={max_iterations}, IK: {ik_solver})")
+    env, checker, state_manager = build_checker(max_iterations, ik_solver)
     print("Ready.\n")
 
     scenarios = [
@@ -307,6 +309,7 @@ if __name__ == "__main__":
                     help="Show infeasible states in viewer after benchmark")
     ap.add_argument("--display-secs",     type=float, default=4.0,
                     help="Seconds to display each infeasible state")
+    ap.add_argument("--ik",               choices=["mink", "frantik"], default="mink")
     ap.add_argument("--verify",           action="store_true",
                     help="Run IK reachability check on every grid cell and plot the result")
     args = ap.parse_args()
@@ -319,6 +322,7 @@ if __name__ == "__main__":
         seed=args.seed,
         visualize=args.visualize,
         display_secs=args.display_secs,
+        ik_solver=args.ik,
     )
 
     if args.verify:

@@ -35,6 +35,8 @@ from typing import Optional
 import mujoco
 import numpy as np
 
+from tampanda.planners.rrt_star import candidate_goals
+
 
 class FeasibilityRRT:
     """Bidirectional RRT (RRT-Connect) optimised for existence queries."""
@@ -292,6 +294,18 @@ class FeasibilityRRT:
         Mirrors RRTStar.plan_to_pose exactly so callers are interchangeable.
         """
         start_config = self.env.data.qpos[:7].copy()
+
+        if hasattr(self.env.ik, "solve_all"):
+            # multi-solution IK: try distinct goals instead of re-seeding
+            for goal_config in candidate_goals(self.env, self.env.ik, target_pos, target_quat,
+                                               max_goals=max_ik_retries):
+                path = self.plan(start_config, goal_config, max_iterations)
+                if path is not None:
+                    q = self.env.data.qpos.copy()
+                    q[:7] = goal_config
+                    self.env.ik.update_configuration(q)
+                    return path
+            return None
 
         for attempt in range(max_ik_retries):
             if attempt == 0:

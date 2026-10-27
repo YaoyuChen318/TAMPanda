@@ -7,6 +7,7 @@ GraspPlanner features:
   - Aligns finger axis with block orientation to minimise required opening
 """
 
+import argparse
 import time
 
 import numpy as np
@@ -33,8 +34,51 @@ def _pick_candidate(candidates):
     return front if front is not None else (candidates[0] if candidates else None)
 
 
+def _straight_path_free(env, q_from, q_to, step=0.1):
+    """Collision-check the straight joint-space move that move_to_compensated executes."""
+    n = max(1, int(np.ceil(np.max(np.abs(q_to - q_from)) / step)))
+    return all(env.is_collision_free(q_from + (q_to - q_from) * (i / n)) for i in range(1, n + 1))
+
+
+def _solve_ik(env, ik, pos, quat, dt, max_checks=50):
+    """IK goal for a straight joint-space move, or None.
+
+    No planner here, so with FrantikIK take the closest solution whose straight
+    path is collision-free (else the closest, e.g. a grasp touching the object).
+    """
+    ik.set_target_position(pos, quat)
+    if not hasattr(ik, "solve_all"):
+        return ik.configuration.q[:7].copy() if ik.converge_ik(dt) else None
+
+    q_now = env.data.qpos[:7].copy()
+    ik.update_configuration(env.data.qpos)
+    solutions = ik.solve_all()
+    if len(solutions) == 0:
+        return None
+    goal, checked = solutions[0], []
+    for q in solutions:
+        # skip near-duplicates from the dense q7 sampling
+        if any(np.linalg.norm(q - c) < 0.2 for c in checked):
+            continue
+        checked.append(q)
+        if _straight_path_free(env, q_now, q):
+            goal = q
+            break
+        if len(checked) >= max_checks:
+            break
+    q_full = env.data.qpos.copy()
+    q_full[:7] = goal
+    ik.update_configuration(q_full)
+    return goal
+
+
 def main():
-    env = make_symbolic_builder().build_env(rate=200.0)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--ik", choices=["mink", "frantik"], default="mink",
+                    help="IK solver: mink (numerical) or frantik (analytical)")
+    args = ap.parse_args()
+
+    env = make_symbolic_builder().build_env(rate=200.0, ik_solver=args.ik)
     ik = env.get_ik()
 
     grid = GridDomain(
@@ -87,17 +131,25 @@ def main():
 
                     if step == 1:
                         print(f"Approaching {target}...")
-                        ik.set_target_position(candidate.approach_pos, candidate.grasp_quat)
-                        converged = ik.converge_ik(dt)
+                        goal_q = _solve_ik(env, ik, candidate.approach_pos, candidate.grasp_quat, dt)
+                        converged = goal_q is not None
                         print("IK result:", "Converged" if converged else "Not converged")
-                        env.move_to_compensated(ik.configuration.q[:7])
+                        if converged:
+                            env.move_to_compensated(goal_q)
+                        else:
+                            print(f"IK failed, skipping {target}.")
+                            candidate = None
 
                     if step == 2:
                         print("Moving to grasp pose...")
-                        ik.set_target_position(candidate.grasp_pos, candidate.grasp_quat)
-                        converged = ik.converge_ik(dt)
+                        goal_q = _solve_ik(env, ik, candidate.grasp_pos, candidate.grasp_quat, dt)
+                        converged = goal_q is not None
                         print("IK result:", "Converged" if converged else "Not converged")
-                        env.move_to_compensated(ik.configuration.q[:7])
+                        if converged:
+                            env.move_to_compensated(goal_q)
+                        else:
+                            print(f"IK failed, skipping {target}.")
+                            candidate = None
 
                     if step == 3:
                         print("Closing gripper...")
@@ -106,18 +158,30 @@ def main():
                     if step == 4:
                         print("Lifting object...")
                         env.attach_object_to_ee(target)
-                        ik.set_target_position(candidate.lift_pos, candidate.grasp_quat)
-                        converged = ik.converge_ik(dt)
+                        goal_q = _solve_ik(env, ik, candidate.lift_pos, candidate.grasp_quat, dt)
+                        converged = goal_q is not None
                         print("IK result:", "Converged" if converged else "Not converged")
-                        env.move_to_compensated(ik.configuration.q[:7])
+                        if converged:
+                            env.move_to_compensated(goal_q)
+                        else:
+                            print(f"IK failed, releasing and skipping {target}.")
+                            env.detach_object()
+                            env.controller.open_gripper()
+                            candidate = None
 
                     if step == 5:
                         print("Moving to dropoff...")
                         dropoff_pos, dropoff_quat = env.get_dropoff_pose()
-                        ik.set_target_position(dropoff_pos, dropoff_quat)
-                        converged = ik.converge_ik(dt)
+                        goal_q = _solve_ik(env, ik, dropoff_pos, dropoff_quat, dt)
+                        converged = goal_q is not None
                         print("IK result:", "Converged" if converged else "Not converged")
-                        env.move_to_compensated(ik.configuration.q[:7])
+                        if converged:
+                            env.move_to_compensated(goal_q)
+                        else:
+                            print(f"IK failed, releasing and skipping {target}.")
+                            env.detach_object()
+                            env.controller.open_gripper()
+                            candidate = None
 
                     if step == 6:
                         print("Opening gripper...")
@@ -135,7 +199,7 @@ def main():
                             targets = []
                             time.sleep(2.0)
 
-                if step == 3 or step == 6:
+                if candidate is not None and (step == 3 or step == 6):
                     env.rest(2.0)
 
             elif target is not None and candidate is None:
